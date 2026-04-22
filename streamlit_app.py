@@ -1,0 +1,186 @@
+
+import streamlit as st
+import joblib
+import pandas as pd
+from datetime import date
+
+# -------------------------------
+# LOAD MODEL
+# -------------------------------
+@st.cache_resource
+def load_model():
+    return joblib.load("/content/A5_ARS_loan_model.pkl")
+
+model = load_model()
+
+# -------------------------------
+# SESSION STATE
+# -------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "step" not in st.session_state:
+    st.session_state.step = 0
+
+if "data" not in st.session_state:
+    st.session_state.data = {}
+
+# -------------------------------
+# CHAT HELPERS
+# -------------------------------
+def bot(msg):
+    st.session_state.messages.append(("assistant", msg))
+
+def user(msg):
+    st.session_state.messages.append(("user", msg))
+
+def render_chat():
+    for role, msg in st.session_state.messages:
+        st.chat_message(role).write(msg)
+
+# -------------------------------
+# DROPDOWN MAPPINGS
+# -------------------------------
+education_map = {
+    "0 - No formal education": 0,
+    "1 - Primary / Below secondary": 1,
+    "2 - Secondary (10th)": 2,
+    "3 - Higher Secondary (12th)": 3,
+    "4 - Graduate": 4,
+    "5 - Postgraduate / Professional": 5
+}
+
+emp_map = {
+    "SE - Self-Employed": "SE",
+    "SA - Salaried": "SA",
+    "AG - Agriculture": "AG",
+    "NR - Non-Resident": "NR",
+    "ST - Student": "ST",
+    "NP - NGO / Non-Profit": "NP",
+    "PE - Pensioner": "PE"
+}
+
+housing_map = {
+    "Stay": 0,
+    "Investment": 1
+}
+
+liability_map = {
+    "Yes": 1,
+    "No": 0
+}
+
+# -------------------------------
+# FLOW
+# -------------------------------
+steps = [
+    {"key": "education", "q": "🎓 Select your education level", "type": "select", "options": list(education_map.keys())},
+    {"key": "emp", "q": "💼 Select your employment type", "type": "select", "options": list(emp_map.keys())},
+    {"key": "birth_year", "q": "📅 Enter your birth year", "type": "number"},
+    {"key": "zip", "q": "📍 Enter your ZIP code", "type": "number"},
+    {"key": "loan_amt", "q": "🏦 Enter loan amount (INR)", "type": "number"},
+    {"key": "ltv", "q": "📊 Enter LTV %", "type": "number"},
+    {"key": "housing", "q": "🏠 Housing category?", "type": "select", "options": list(housing_map.keys())},
+    {"key": "net_sal", "q": "💰 Enter monthly salary", "type": "number"},
+    {"key": "liabilities", "q": "📉 Any existing liabilities?", "type": "select", "options": list(liability_map.keys())},
+]
+
+# -------------------------------
+# INIT
+# -------------------------------
+if len(st.session_state.messages) == 0:
+    bot("Hi! Let’s check your loan eligibility.")
+    bot(steps[0]["q"])
+
+st.title("💬 Loan Approval Chatbot")
+render_chat()
+
+step = st.session_state.step
+
+# -------------------------------
+# INPUT HANDLER
+# -------------------------------
+if step < len(steps):
+    s = steps[step]
+    value = None
+
+    # NUMBER INPUT
+    if s["type"] == "number":
+        val = st.chat_input("Enter value")
+        if val:
+            if not val.isdigit():
+                st.warning("Enter a valid number")
+                st.stop()
+            value = int(val)
+
+    # SELECT INPUT
+    elif s["type"] == "select":
+        option = st.selectbox("Choose:", s["options"], key=s["key"])
+        if st.button("Submit"):
+            value = option
+
+    # -------------------------------
+    # PROCESS INPUT
+    # -------------------------------
+    if value is not None:
+
+        # STORE RAW USER MESSAGE
+        user(str(value))
+
+        # ENCODE VALUES
+        if s["key"] == "education":
+            st.session_state.data["education"] = education_map[value]
+
+        elif s["key"] == "emp":
+            st.session_state.data["emp_level"] = emp_map[value]
+
+        elif s["key"] == "housing":
+            st.session_state.data["housing_category"] = housing_map[value]
+
+        elif s["key"] == "liabilities":
+            st.session_state.data["existing_liabilities"] = liability_map[value]
+
+        else:
+            st.session_state.data[s["key"]] = value
+
+        # NEXT STEP
+        st.session_state.step += 1
+
+        if st.session_state.step < len(steps):
+            bot(steps[st.session_state.step]["q"])
+
+        st.rerun()
+
+# -------------------------------
+# FINAL PREDICTION
+# -------------------------------
+else:
+    bot("🔍 Evaluating your application...")
+
+    data = st.session_state.data.copy()
+
+    # Optional feature engineering
+    if "birth_year" in data:
+        data["age"] = date.today().year - data["birth_year"]
+
+    df = pd.DataFrame([data])
+
+    st.write("### Model Input")
+    st.write(df)
+
+    try:
+        pred = model.predict(df)[0]
+
+        if pred == 1:
+            bot("✅ Loan Approved")
+        else:
+            bot("❌ Loan Rejected")
+
+    except Exception as e:
+        bot(f"⚠️ Model error: {e}")
+
+    render_chat()
+
+    if st.button("🔄 Restart"):
+        st.session_state.clear()
+        st.rerun()
